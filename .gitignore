@@ -1,0 +1,18 @@
+# Compiled binaries
+client
+server
+*.out
+*.o
+client1.cpp
+client2.cpp
+client3.cpp
+server1.cpp
+server2.cpp
+server3.cpp
+
+# OS generated files
+.DS_Store
+
+# Any test keys or temporary files (if you create them later)
+*.key
+*.pem
