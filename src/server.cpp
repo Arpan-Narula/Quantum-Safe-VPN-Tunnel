@@ -10,8 +10,6 @@
 #include <linux/if_tun.h>
 #include <sys/select.h>
 #include <signal.h>
-
-// Cryptography Headers
 #include <oqs/oqs.h>
 #include <openssl/evp.h>
 #include <openssl/kdf.h>
@@ -22,7 +20,6 @@
 
 #define BUFFER_SIZE 2048
 #define KYBER_ALG OQS_KEM_alg_kyber_512
-// AES-GCM Constants
 #define IV_LEN 12
 #define TAG_LEN 16
 
@@ -31,14 +28,11 @@ using namespace std;
 int tun_fd, server_fd;
 uint8_t final_symmetric_key[32]; 
 
-
-// Helper to handle OpenSSL errors
 void handle_crypto_error() {
     ERR_print_errors_fp(stderr);
     cerr << "[!] Cryptographic operation failed." << endl;
 }
 
-// Encrypts plaintext and formats output as: [12-byte IV] + [Ciphertext] + [16-byte Tag]
 int encrypt_packet(const uint8_t *plaintext, int plaintext_len, const uint8_t *key, uint8_t *ciphertext_out) {
     EVP_CIPHER_CTX *ctx;
     int len;
@@ -46,42 +40,34 @@ int encrypt_packet(const uint8_t *plaintext, int plaintext_len, const uint8_t *k
     uint8_t iv[IV_LEN];
     uint8_t tag[TAG_LEN];
 
-    // 1. Generate a random IV for every single packet
     if (!RAND_bytes(iv, sizeof(iv))) handle_crypto_error();
 
-    // 2. Initialize the context
     if (!(ctx = EVP_CIPHER_CTX_new())) handle_crypto_error();
     if (1 != EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL)) handle_crypto_error();
     if (1 != EVP_EncryptInit_ex(ctx, NULL, NULL, key, iv)) handle_crypto_error();
 
-    // 3. Provide the plaintext to be encrypted
     if (1 != EVP_EncryptUpdate(ctx, ciphertext_out + IV_LEN, &len, plaintext, plaintext_len)) handle_crypto_error();
     ciphertext_len = len;
 
-    // 4. Finalize encryption
     if (1 != EVP_EncryptFinal_ex(ctx, ciphertext_out + IV_LEN + len, &len)) handle_crypto_error();
     ciphertext_len += len;
 
-    // 5. Get the Authentication Tag
     if (1 != EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, TAG_LEN, tag)) handle_crypto_error();
 
-    // 6. Assemble the final packet layout: [IV] [Ciphertext] [Tag]
     memcpy(ciphertext_out, iv, IV_LEN);
     memcpy(ciphertext_out + IV_LEN + ciphertext_len, tag, TAG_LEN);
 
     EVP_CIPHER_CTX_free(ctx);
-    return IV_LEN + ciphertext_len + TAG_LEN; // Total size to send over UDP
+    return IV_LEN + ciphertext_len + TAG_LEN;
 }
 
-// Parses [IV] + [Ciphertext] + [Tag] and decrypts. Returns -1 if tampered.
 int decrypt_packet(const uint8_t *encrypted_data, int encrypted_len, const uint8_t *key, uint8_t *plaintext_out) {
-    if (encrypted_len < IV_LEN + TAG_LEN) return -1; // Packet too small
+    if (encrypted_len < IV_LEN + TAG_LEN) return -1;
 
     EVP_CIPHER_CTX *ctx;
     int len;
     int plaintext_len;
-    
-    // 1. Extract components from the wire format
+
     uint8_t iv[IV_LEN];
     uint8_t tag[TAG_LEN];
     int ciphertext_len = encrypted_len - IV_LEN - TAG_LEN;
@@ -90,19 +76,15 @@ int decrypt_packet(const uint8_t *encrypted_data, int encrypted_len, const uint8
     memcpy(tag, encrypted_data + encrypted_len - TAG_LEN, TAG_LEN);
     const uint8_t *ciphertext = encrypted_data + IV_LEN;
 
-    // 2. Initialize decryption context
     if (!(ctx = EVP_CIPHER_CTX_new())) handle_crypto_error();
     if (!EVP_DecryptInit_ex(ctx, EVP_aes_256_gcm(), NULL, NULL, NULL)) handle_crypto_error();
     if (!EVP_DecryptInit_ex(ctx, NULL, NULL, key, iv)) handle_crypto_error();
 
-    // 3. Provide the ciphertext to be decrypted
     if (!EVP_DecryptUpdate(ctx, plaintext_out, &len, ciphertext, ciphertext_len)) handle_crypto_error();
     plaintext_len = len;
 
-    // 4. Provide the expected tag for integrity verification
     if (!EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_TAG, TAG_LEN, tag)) handle_crypto_error();
 
-    // 5. Finalize and verify. If return value is <= 0, the packet was tampered with!
     int ret = EVP_DecryptFinal_ex(ctx, plaintext_out + len, &len);
     EVP_CIPHER_CTX_free(ctx);
 
@@ -110,7 +92,7 @@ int decrypt_packet(const uint8_t *encrypted_data, int encrypted_len, const uint8
         plaintext_len += len;
         return plaintext_len;
     } else {
-        return -1; // Authentication failed (packet dropped)
+        return -1;
     }
 }
 
@@ -169,21 +151,18 @@ bool wait_for_handshake(struct sockaddr_in& client_addr, socklen_t& client_len) 
     cout << "[+] Received ClientHello from " << inet_ntoa(client_addr.sin_addr) << endl;
 
     OQS_KEM *kem = OQS_KEM_new(KYBER_ALG);
-    
-    // Parse ClientHello
+
     uint8_t client_x25519_pub[32];
     memcpy(client_x25519_pub, client_hello, 32);
     
     uint8_t client_kyber_pub[kem->length_public_key];
     memcpy(client_kyber_pub, client_hello + 32, kem->length_public_key);
 
-    // 1. Generate Server X25519 Keypair
     EVP_PKEY *x25519_pkey = EVP_PKEY_Q_keygen(NULL, NULL, "X25519");
     uint8_t server_x25519_pub[32];
     size_t server_x25519_pub_len = sizeof(server_x25519_pub);
     EVP_PKEY_get_raw_public_key(x25519_pkey, server_x25519_pub, &server_x25519_pub_len);
 
-    // 2. Calculate X25519 Shared Secret
     EVP_PKEY *client_pkey = EVP_PKEY_new_raw_public_key(EVP_PKEY_X25519, NULL, client_x25519_pub, 32);
     EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new(x25519_pkey, NULL);
     EVP_PKEY_derive_init(ctx);
@@ -194,15 +173,12 @@ bool wait_for_handshake(struct sockaddr_in& client_addr, socklen_t& client_len) 
     uint8_t x25519_ss[x25519_ss_len];
     EVP_PKEY_derive(ctx, x25519_ss, &x25519_ss_len);
 
-    // 3. Encapsulate Kyber Secret using Client's Public Key
     uint8_t kyber_ct[kem->length_ciphertext];
     uint8_t kyber_ss[kem->length_shared_secret];
     OQS_KEM_encaps(kem, kyber_ct, kyber_ss, client_kyber_pub);
 
-    // 4. Combine Secrets
     derive_final_key(x25519_ss, x25519_ss_len, kyber_ss, kem->length_shared_secret, final_symmetric_key, 32);
 
-    // 5. Send ServerHello (Server X25519 PK + Kyber Ciphertext)
     size_t hello_len = 32 + kem->length_ciphertext;
     uint8_t *server_hello = new uint8_t[hello_len];
     memcpy(server_hello, server_x25519_pub, 32);
@@ -214,7 +190,6 @@ bool wait_for_handshake(struct sockaddr_in& client_addr, socklen_t& client_len) 
 
     cout << "[+] Handshake Complete. Symmetric key derived successfully!" << endl;
 
-    // Cleanup
     EVP_PKEY_CTX_free(ctx);
     EVP_PKEY_free(client_pkey);
     EVP_PKEY_free(x25519_pkey);
@@ -246,14 +221,13 @@ int main(int argc, char *argv[]) {
     bind(server_fd, (struct sockaddr*)&address, sizeof(address));
 
     socklen_t client_len = sizeof(client_addr);
-    
-    // Execute Phase B Handshake before tunnel loop
+
     if (!wait_for_handshake(client_addr, client_len)) {
         cerr << "[!] Handshake failed." << endl;
         return -1;
     }
 
-    bool client_known = true; // Handshake locks the client
+    bool client_known = true;
 
     cout << "[+] UDP Server listening. Routing mapped to client." << endl;
     cout << "------------------------------------------------------" << endl;
@@ -261,7 +235,6 @@ int main(int argc, char *argv[]) {
     char buffer[BUFFER_SIZE];
     fd_set readfds;
 
-    // Server Phase C: The Encrypted Data Loop
     char tun_buf[BUFFER_SIZE];
     uint8_t wire_buf[BUFFER_SIZE + IV_LEN + TAG_LEN];
     uint8_t decrypt_buf[BUFFER_SIZE];
@@ -279,12 +252,10 @@ int main(int argc, char *argv[]) {
 
         if (activity < 0) break;
 
-        // INBOUND: VPN Client -> VPN Server -> OS
         if (FD_ISSET(server_fd, &readfds)) {
             int valread = recvfrom(server_fd, wire_buf, sizeof(wire_buf), 0, (struct sockaddr*)&client_addr, &client_len);
             
             if (valread > 0) {
-                // Decrypt and verify client packet
                 int plain_len = decrypt_packet(wire_buf, valread, final_symmetric_key, decrypt_buf);
                 
                 if (plain_len > 0) {
@@ -297,12 +268,10 @@ int main(int argc, char *argv[]) {
             }
         }
 
-        // OUTBOUND: OS -> VPN Server -> VPN Client
         if (FD_ISSET(tun_fd, &readfds)) {
             int valread = read(tun_fd, tun_buf, sizeof(tun_buf));
             
             if (valread > 0 && client_known) {
-                // Encrypt outgoing packet
                 int wire_len = encrypt_packet((uint8_t*)tun_buf, valread, final_symmetric_key, wire_buf);
                 
                 sendto(server_fd, wire_buf, wire_len, 0, (struct sockaddr*)&client_addr, client_len);
@@ -315,3 +284,4 @@ int main(int argc, char *argv[]) {
     handle_sigint(0);
     return 0;
 }
+
