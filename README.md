@@ -26,3 +26,18 @@ You must have `liboqs` and `openssl` (version 3.0+) installed on your Linux mach
 git clone [https://github.com/yourusername/Quantum-Safe-VPN-Tunnel.git](https://github.com/yourusername/Quantum-Safe-VPN-Tunnel.git)
 cd Quantum-Safe-VPN-Tunnel
 make
+```
+
+## Usage
+Note: The application requires root privileges to allocate the /dev/net/tun interface and modify the local IP routing tables.
+### 1. Start the Server
+The server binds to a specified UDP port and waits for the hybrid handshake.
+```bash
+sudo ./server <PORT>
+```
+
+### 2. Start the Client
+Connect the client to the server's public IP address and port.
+```bash
+sudo ./client <SERVER_IP> <SERVER_PORT>
+```
